@@ -1,11 +1,17 @@
-import {SendEmailCommand, SESClient} from "@aws-sdk/client-ses";
 import {Validator} from "jsonschema";
 import {QueryResult} from "pg";
 import {log_error, isValidateEmail} from "./utils";
 import emailRequestSchema from "../json_schemas/email-request-schema";
 import db from "../config/db";
 
-const sesClient = new SESClient({region: process.env.AWS_REGION});
+// Email transport: Resend (https://resend.com).
+// Configure with:
+//   RESEND_API_KEY  required
+//   MAIL_FROM       required, e.g. "Worklenz <noreply@your-domain.com>"
+//                   (must be a verified sender / domain in Resend)
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const MAIL_FROM = process.env.MAIL_FROM || "";
+const RESEND_ENDPOINT = "https://api.resend.com/emails";
 
 export interface IEmail {
   to?: string[];
@@ -51,48 +57,49 @@ async function filterBouncedEmails(emails: string[]): Promise<void> {
 
 export async function sendEmail(email: IEmail): Promise<string | null> {
   try {
+    if (!RESEND_API_KEY || !MAIL_FROM) {
+      log_error(new Error("Email skipped: RESEND_API_KEY and MAIL_FROM must be set."));
+      return null;
+    }
+
     const options = {...email} as IEmail;
     options.to = Array.isArray(options.to) ? Array.from(new Set(options.to)) : [];
 
-    // Filter out empty, null, undefined, and invalid emails
     options.to = options.to
-      .filter(email => email && typeof email === 'string' && email.trim().length > 0)
-      .map(email => email.trim())
-      .filter(email => isValidateEmail(email));
+      .filter(e => e && typeof e === "string" && e.trim().length > 0)
+      .map(e => e.trim())
+      .filter(e => isValidateEmail(e));
 
     if (options.to.length) {
       await filterBouncedEmails(options.to);
       await filterSpamEmails(options.to);
     }
 
-    // Double-check that we still have valid emails after filtering
     if (!options.to.length) return null;
-
     if (!isValidMailBody(options)) return null;
 
-    const charset = "UTF-8";
-
-    const command = new SendEmailCommand({
-      Destination: {
-        ToAddresses: options.to
+    const res = await fetch(RESEND_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json"
       },
-      Message: {
-        Subject: {
-          Charset: charset,
-          Data: options.subject
-        },
-        Body: {
-          Html: {
-            Charset: charset,
-            Data: options.html
-          }
-        }
-      },
-      Source: "Worklenz <noreply@worklenz.com>"
+      body: JSON.stringify({
+        from: MAIL_FROM,
+        to: options.to,
+        subject: options.subject,
+        html: options.html
+      })
     });
 
-    const res = await sesClient.send(command);
-    return res.MessageId || null;
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      log_error(new Error(`Resend send failed: ${res.status} ${res.statusText} ${errBody}`));
+      return null;
+    }
+
+    const data = await res.json().catch(() => null) as { id?: string } | null;
+    return data?.id || null;
   } catch (e) {
     log_error(e);
   }
