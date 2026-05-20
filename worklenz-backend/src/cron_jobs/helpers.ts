@@ -12,8 +12,11 @@ export function mapMembersWithAnd(members: string) {
 }
 
 export function getBaseUrl() {
-  if (isLocalServer()) return `http://${process.env.FRONTEND_URL}`;
-  return `https://${process.env.FRONTEND_URL}`;
+  // FRONTEND_URL may be a full URL ("https://example.com") or a bare host
+  // ("example.com"). Strip any scheme so we don't end up with "https://https://...".
+  const host = (process.env.FRONTEND_URL || "").replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  if (isLocalServer()) return `http://${host}`;
+  return `https://${host}`;
 }
 
 function mapMembers(project: ITaskAssignmentModelProject) {

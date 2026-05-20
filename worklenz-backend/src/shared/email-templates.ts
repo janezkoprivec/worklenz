@@ -4,7 +4,11 @@ import {sendEmail} from "./email";
 import {sanitize} from "./utils";
 import FileConstants from "./file-constants";
 
-const FRONTEND_URL = process.env.FRONTEND_URL || "worklenz.com";
+// The email HTML templates hardcode "https://[VAR_HOSTNAME]/..." (see
+// worklenz-email-templates/*.html), so [VAR_HOSTNAME] must be a bare host —
+// otherwise FRONTEND_URL=https://example.com yields https://https://example.com/...
+// and every link in every email is broken (invite, reset, welcome, etc.).
+const FRONTEND_URL = (process.env.FRONTEND_URL || "worklenz.com").replace(/^https?:\/\//i, "").replace(/\/+$/, "");
 
 export function sendWelcomeEmail(email: string, name: string) {
   let content = FileConstants.getEmailTemplate(IEmailTemplateType.Welcome) as string;
